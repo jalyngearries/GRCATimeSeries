@@ -1,0 +1,221 @@
+
+
+// Comprehensive GEE script to manage & process 8-band imagery
+// for construction and extraction of vegetation health index time series
+// using PlanetScope 3m PSScenes ordered through the Planet Orders API 
+
+
+        // STEP 1: IMPORT AND PREPARE IMAGE COLLECTIONS 
+
+
+// importing & preparing image collections
+var TruckSeat_images = ee.ImageCollection('projects/ee-jg3648/assets/TruckSeat_collection')
+
+
+// define quality bands to remove
+var qualitybands = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8']
+
+// create function to remove bands
+var selectBands = function(image){
+  return image.select(image.bandNames().removeAll(qualitybands));
+};
+
+//apply function to remove quality bands in image collection
+var TruckSeat_stack = TruckSeat_images.map(selectBands)
+
+
+         // STEP 2: Vegetation index computation        
+
+
+// function that allows for easy modification of band math
+    
+    // write function parameters  
+/** 
+ * Function to calculate and return only the custom vegetation index band for each image in a collection.
+ * @param {ee.ImageCollection} imageCollection - The input image collection.
+ * @param {String} expression - The formula to compute the index, using band tags (e.g., 'NIR', 'Red').
+ * @param {Object} bandNames - Object mapping generic band tags to actual band names in the image.
+ * @returns {ee.ImageCollection} - The image collection with only the new index band in each image.
+ */
+ 
+// define band names for PlanetScope sensors
+var bands = {
+  'CoastalBlue': 'B1',
+  'Blue': 'B2',
+  'GreenI': 'B3',
+  'Green': 'B4',
+  'Yellow': 'B5',
+  'Red': 'B6',
+  'RedEdge': 'B7',  
+  'NIR': 'B8'       
+};
+
+// create an adaptable function to compute the index for each image in a collection 
+function calculateIndexCollection(imageCollection, expression, bandNames) {
+  return imageCollection.map(function(image) {
+    var expr = expression.replace(/(B1|B2|B3|B4|B5|B6|B6Edge|B8)/g, function(match) {
+      return bandNames[match];
+      
+    });
+
+// Ensure all used bands are selected and mapped correctly
+var indexImage = image.expression(expr, {
+  'CoastalBlue': image.select(bandNames['CoastalBlue']),
+  'Blue': image.select(bandNames['Blue']),
+  'GreenI': image.select(bandNames['GreenI']),
+  'Green': image.select(bandNames['Green']),
+  'Yellow': image.select(bandNames['Yellow']),
+  'Red': image.select(bandNames['Red']),
+  'RedEdge': image.select(bandNames['RedEdge']),
+  'NIR': image.select(bandNames['NIR'])
+  
+}).rename('index');
+return indexImage;  // Returning only the index band
+  });
+}
+
+// create expressions for each vegetation health index 
+ 
+var BNDVI_exp = '(NIR - Blue) / (NIR + Blue)'
+var DVI_exp = '(NIR - Red)'
+var GLI_exp = '(2*Green-Red-Blue)/(2*Green+Red+Blue)'
+var GOSAVI_exp = '(NIR-Green)/(NIR+Green+Yellow)'
+var NDVI_exp = '(NIR-Red)/(NIR+Red)'
+var NDREI_exp = '(NIR - RedEdge) / (NIR + RedEdge)';
+var OSAVI_exp = '(NIR + Red)/(NIR + Red + 0.16)'
+var RDVI_exp = '(NIR - Red)/sqrt(NIR + Red)'
+
+// apply calculateIndexCollection function with different expressions to the image collection
+var TruckSeat_BNDVI_images = calculateIndexCollection(TruckSeat_stack, BNDVI_exp, bands);
+var TruckSeat_DVI_images = calculateIndexCollection(TruckSeat_stack, DVI_exp, bands);
+var TruckSeat_GLI_images = calculateIndexCollection(TruckSeat_stack, GLI_exp, bands);
+var TruckSeat_GOSAVI_images = calculateIndexCollection(TruckSeat_stack, GOSAVI_exp, bands);
+var TruckSeat_NDREI_images = calculateIndexCollection(TruckSeat_stack, NDREI_exp, bands);
+var TruckSeat_NDVI_images = calculateIndexCollection(TruckSeat_stack, NDVI_exp, bands);
+var TruckSeat_OSAVI_images = calculateIndexCollection(TruckSeat_stack, OSAVI_exp, bands);
+var TruckSeat_RDVI_images = calculateIndexCollection(TruckSeat_stack, RDVI_exp, bands);
+
+// merge image stacks into multiband images
+var TruckSeat_BNDVI = TruckSeat_BNDVI_images.toBands();
+var TruckSeat_DVI = TruckSeat_DVI_images.toBands();
+var TruckSeat_GLI = TruckSeat_GLI_images.toBands();
+var TruckSeat_GOSAVI = TruckSeat_GOSAVI_images.toBands();
+var TruckSeat_NDREI = TruckSeat_NDREI_images.toBands();
+var TruckSeat_NDVI = TruckSeat_NDVI_images.toBands();
+var TruckSeat_OSAVI = TruckSeat_OSAVI_images.toBands();
+var TruckSeat_RDVI = TruckSeat_RDVI_images.toBands();
+
+// create function to change band names to only include dates (instead of image IDs)
+      
+function renameBandsByDate(image) {
+  var bandNames = image.bandNames();
+  var newBandNames = bandNames.map(function(name) {
+    var parts = ee.String(name).split('_');
+    return parts.get(0);
+    
+  });
+  return image.rename(newBandNames);
+}
+
+// apply function to all images
+
+var TruckSeat_BNDVI = renameBandsByDate(TruckSeat_BNDVI)
+var TruckSeat_DVI = renameBandsByDate(TruckSeat_DVI)
+var TruckSeat_GLI = renameBandsByDate(TruckSeat_GLI)
+var TruckSeat_GOSAVI = renameBandsByDate(TruckSeat_GOSAVI)
+var TruckSeat_NDREI = renameBandsByDate(TruckSeat_NDREI)
+var TruckSeat_NDVI = renameBandsByDate(TruckSeat_NDVI)
+var TruckSeat_OSAVI = renameBandsByDate(TruckSeat_OSAVI)
+var TruckSeat_RDVI = renameBandsByDate(TruckSeat_RDVI)
+
+
+         
+          // STEP 3: CLIPPING TO GEOMETRIES
+          
+// load merged treatment polygon as feature collection
+var TruckSeat_bound_fc = ee.FeatureCollection('projects/ee-jg3648/assets/TruckSeat_AllTreatedArea_Polygon')
+var TruckSeat_refpoly_fc = ee.FeatureCollection('projects/ee-jg3648/assets/Polygons/TruckSeat_ReferencePolygon')
+
+// convert to a geometry
+var TruckSeat_polygon = ee.Geometry.Polygon(TruckSeat_bound_fc.geometry().coordinates());
+var TruckSeat_refpoly = ee.Geometry.Polygon(TruckSeat_refpoly_fc.geometry().coordinates());
+
+
+// sampling values from image collection at specified locations --> FeatureCollection
+var TruckSeat_BNDVI_Tx_TS = TruckSeat_BNDVI.sample({region:TruckSeat_polygon, scale:3, geometries:true});
+var TruckSeat_DVI_Tx_TS = TruckSeat_DVI.sample({region:TruckSeat_polygon, scale:3, geometries:true});
+var TruckSeat_GLI_Tx_TS = TruckSeat_GLI.sample({region:TruckSeat_polygon, scale:3, geometries:true});
+var TruckSeat_GOSAVI_Tx_TS = TruckSeat_GOSAVI.sample({region:TruckSeat_polygon, scale:3, geometries:true});
+var TruckSeat_NDREI_Tx_TS = TruckSeat_NDREI.sample({region:TruckSeat_polygon, scale:3, geometries:true});
+var TruckSeat_NDVI_Tx_TS = TruckSeat_NDVI.sample({region:TruckSeat_polygon, scale:3, geometries:true});
+var TruckSeat_OSAVI_Tx_TS = TruckSeat_OSAVI.sample({region:TruckSeat_polygon, scale:3, geometries:true});
+var TruckSeat_RDVI_Tx_TS = TruckSeat_RDVI.sample({region:TruckSeat_polygon, scale:3, geometries:true});
+
+// export table as CSV to Drive
+//Export.table.toDrive({
+//  collection: TruckSeat_BNDVI_Tx_TS,
+//  description: 'TruckSeat_BNDVI_TimeSeries',
+//  fileFormat: 'CSV',
+//  folder:'GEE Exports'
+//});
+
+
+  // adding to map for visualization 
+  
+var TruckSeat_Tx_BNDVI = TruckSeat_BNDVI.clip(TruckSeat_polygon)
+var TruckSeat_Tx_DVI = TruckSeat_DVI.clip(TruckSeat_polygon)
+var TruckSeat_Tx_GLI = TruckSeat_GLI.clip(TruckSeat_polygon)
+var TruckSeat_Tx_GOSAVI = TruckSeat_GOSAVI.clip(TruckSeat_polygon)
+var TruckSeat_Tx_NDVI = TruckSeat_NDVI.clip(TruckSeat_polygon)
+var TruckSeat_Tx_NDREI = TruckSeat_NDREI.clip(TruckSeat_polygon)
+var TruckSeat_Tx_OSAVI = TruckSeat_OSAVI.clip(TruckSeat_polygon)
+var TruckSeat_Tx_RDVI = TruckSeat_RDVI.clip(TruckSeat_polygon)
+  
+var TruckSeat_Ref_BNDVI = TruckSeat_BNDVI.clip(TruckSeat_refpoly)
+var TruckSeat_Ref_DVI = TruckSeat_DVI.clip(TruckSeat_refpoly)
+var TruckSeat_Ref_GLI = TruckSeat_GLI.clip(TruckSeat_refpoly)
+var TruckSeat_Ref_GOSAVI = TruckSeat_GOSAVI.clip(TruckSeat_refpoly)
+var TruckSeat_Ref_NDVI = TruckSeat_NDVI.clip(TruckSeat_refpoly)
+var TruckSeat_Ref_NDREI = TruckSeat_NDREI.clip(TruckSeat_refpoly)
+var TruckSeat_Ref_OSAVI = TruckSeat_OSAVI.clip(TruckSeat_refpoly)
+var TruckSeat_Ref_RDVI = TruckSeat_RDVI.clip(TruckSeat_refpoly)
+  
+  
+          // change detection for visual comparison pre/post-tx
+  
+var TruckSeatRef_PreTx_NDREI = TruckSeat_Ref_NDREI.select('20210916')
+var TruckSeatRef_PostTx_NDREI = TruckSeat_Ref_NDREI.select('20231015')
+
+var TruckSeatRef_PreTx_NDREI = TruckSeat_Ref_NDREI.select('20210916')
+var TruckSeatRef_PostTx_NDREI = TruckSeat_Ref_NDREI.select('20231015')
+
+
+  // setting visual parameters
+var ColorCompositeVisParams = {
+  opacity:1,
+  bands:["B6","B4","B2"],
+  min:306,
+  max:2915,
+  gamma:1};
+  
+  var visParamsNDREI = { //adjust for each index
+  min: -.2,
+  max:0.4,
+  palette:['brown','yellow','green']
+};
+
+  var visParamsNDREITx = { //adjust for each index
+  opacity:1,
+  min: -0.1,
+  max:0.25,
+  palette:['brown','yellow','green']
+};
+
+
+Map.addLayer(TruckSeat_stack, ColorCompositeVisParams, 'Color Composite of Image Stack')
+
+Map.addLayer(TruckSeat_Tx_NDREI.select('20210916'), visParamsNDREITx, 'Pre-Treatment NDREI');
+Map.addLayer(TruckSeat_Tx_NDREI.select('20231015'), visParamsNDREITx, 'Post-Treatment NDREI');
+
+Map.addLayer(TruckSeat_Ref_NDREI.select('20210916'), visParamsNDREITx, 'Reference Pre-Treatment NDREI');
+Map.addLayer(TruckSeat_Ref_NDREI.select('20231015'), visParamsNDREITx, 'Reference Post-Treatment NDREI');
